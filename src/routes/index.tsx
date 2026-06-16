@@ -512,6 +512,7 @@ function Index() {
       <Nav />
       <main>
         <Hero />
+        <AgentArchitecture />
         <Settings />
         <Skills />
         <Process />
