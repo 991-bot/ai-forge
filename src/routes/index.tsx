@@ -8,6 +8,7 @@ import {
   MessageSquare, Workflow, Send, Mail, FileCode, CheckCircle2, ArrowRight,
 } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
+import { AgentArchitecture } from "@/components/agent-architecture";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -22,6 +23,7 @@ export const Route = createFileRoute("/")({
 });
 
 const nav = [
+  { id: "architecture", label: "Архитектура" },
   { id: "settings", label: "Настройки" },
   { id: "skills", label: "Навыки" },
   { id: "stack", label: "Технологии" },
@@ -510,6 +512,7 @@ function Index() {
       <Nav />
       <main>
         <Hero />
+        <AgentArchitecture />
         <Settings />
         <Skills />
         <Process />
