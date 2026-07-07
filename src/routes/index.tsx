@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { motion, useScroll, useTransform } from "framer-motion";
 import { useRef, useState } from "react";
 import {
@@ -61,7 +61,12 @@ function Nav() {
             </a>
           ))}
         </nav>
-        <ThemeToggle />
+        <div className="flex items-center gap-2">
+          <Link to="/builder" className="hidden sm:inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm font-semibold text-white shadow-glow" style={{ background: "var(--gradient-brand)" }}>
+            <Sparkles className="h-3.5 w-3.5" /> Builder
+          </Link>
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );
