@@ -14,30 +14,130 @@ export type Database = {
   }
   public: {
     Tables: {
+      builder_files: {
+        Row: {
+          content: string
+          id: string
+          path: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          content?: string
+          id?: string
+          path: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          content?: string
+          id?: string
+          path?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "builder_files_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "builder_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      builder_messages: {
+        Row: {
+          content: string
+          created_at: string
+          files_changed: Json | null
+          id: string
+          plan: string | null
+          project_id: string
+          role: string
+          thinking: string | null
+        }
+        Insert: {
+          content?: string
+          created_at?: string
+          files_changed?: Json | null
+          id?: string
+          plan?: string | null
+          project_id: string
+          role: string
+          thinking?: string | null
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          files_changed?: Json | null
+          id?: string
+          plan?: string | null
+          project_id?: string
+          role?: string
+          thinking?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "builder_messages_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "builder_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       builder_projects: {
         Row: {
           created_at: string
-          html: string
+          description: string | null
           id: string
-          prompt: string
-          session_id: string
           title: string
+          updated_at: string
+          user_id: string
         }
         Insert: {
           created_at?: string
-          html: string
+          description?: string | null
           id?: string
-          prompt: string
-          session_id: string
           title?: string
+          updated_at?: string
+          user_id: string
         }
         Update: {
           created_at?: string
-          html?: string
+          description?: string | null
           id?: string
-          prompt?: string
-          session_id?: string
           title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          email: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string | null
+          id?: string
+          updated_at?: string
         }
         Relationships: []
       }
