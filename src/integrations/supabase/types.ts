@@ -91,26 +91,35 @@ export type Database = {
         Row: {
           created_at: string
           description: string | null
+          html: string | null
           id: string
+          prompt: string | null
+          session_id: string | null
           title: string
           updated_at: string
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
           description?: string | null
+          html?: string | null
           id?: string
+          prompt?: string | null
+          session_id?: string | null
           title?: string
           updated_at?: string
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
           description?: string | null
+          html?: string | null
           id?: string
+          prompt?: string | null
+          session_id?: string | null
           title?: string
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: []
       }

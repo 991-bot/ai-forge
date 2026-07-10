@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft, Monitor, Smartphone, Tablet } from "lucide-react";
+import { Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft, Monitor, Smartphone, Tablet, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger,
@@ -51,6 +51,7 @@ function BuilderPage() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"preview" | "code">("preview");
   const [device, setDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -59,7 +60,7 @@ function BuilderPage() {
   useEffect(() => {
     if (!sessionId) return;
     supabase.from("builder_projects").select("*").eq("session_id", sessionId).order("created_at", { ascending: false }).limit(30)
-      .then(({ data }) => { if (data) setProjects(data as Project[]); });
+      .then(({ data }) => { if (data) setProjects(data as unknown as Project[]); });
   }, [sessionId]);
 
   useEffect(() => {
@@ -98,8 +99,8 @@ function BuilderPage() {
 
       const { data } = await supabase.from("builder_projects").insert({
         session_id: sessionId, title, prompt, html,
-      }).select().single();
-      if (data) setProjects((p) => [data as Project, ...p]);
+      } as never).select().single();
+      if (data) setProjects((p) => [data as unknown as Project, ...p]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Ошибка сети");
     } finally {
@@ -109,7 +110,8 @@ function BuilderPage() {
 
   function newProject() {
     setMessages([]); setCurrentHtml(""); setCurrentTitle(""); setInput("");
-    inputRef.current?.focus();
+    setSidebarOpen(false);
+    setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   function openProject(p: Project) {
@@ -148,6 +150,13 @@ function BuilderPage() {
       {/* Top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b bg-background/80 px-4 py-2.5 backdrop-blur">
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSidebarOpen((s) => !s)}
+            className="hidden h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground md:grid"
+            title={sidebarOpen ? "Скрыть панель" : "Показать панель"}
+          >
+            {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+          </button>
           <Link to="/" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Профиль
           </Link>
@@ -190,8 +199,9 @@ function BuilderPage() {
         </div>
       </header>
 
-      <div className="grid h-[calc(100vh-53px)] grid-cols-1 md:grid-cols-[280px_1fr_1.4fr]">
+      <div className={`grid h-[calc(100vh-53px)] grid-cols-1 ${sidebarOpen ? "md:grid-cols-[280px_1fr_1.4fr]" : "md:grid-cols-[1fr_1.4fr]"}`}>
         {/* Projects sidebar */}
+        {sidebarOpen && (
         <aside className="hidden flex-col border-r md:flex">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Мои сайты</span>
@@ -224,6 +234,9 @@ function BuilderPage() {
             ))}
           </div>
         </aside>
+        )}
+
+
 
         {/* Chat */}
         <section className="flex min-h-0 flex-col border-r">
