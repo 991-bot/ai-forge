@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft, Monitor, Smartphone, Tablet } from "lucide-react";
+import { Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft, Monitor, Smartphone, Tablet, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger,
