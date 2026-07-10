@@ -99,8 +99,8 @@ function BuilderPage() {
 
       const { data } = await supabase.from("builder_projects").insert({
         session_id: sessionId, title, prompt, html,
-      }).select().single();
-      if (data) setProjects((p) => [data as Project, ...p]);
+      } as never).select().single();
+      if (data) setProjects((p) => [data as unknown as Project, ...p]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Ошибка сети");
     } finally {
