@@ -51,6 +51,7 @@ function BuilderPage() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"preview" | "code">("preview");
   const [device, setDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
