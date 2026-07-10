@@ -51,8 +51,8 @@ export const Route = createFileRoute("/api/generate")({
             system: SYSTEM_PROMPT,
             messages: messages.map((m) => ({ role: m.role, content: m.content })),
             providerOptions: {
-              openai: { response_format: { type: "json_object" } },
-            } as never,
+              lovable: { response_format: { type: "json_object" } },
+            },
           });
 
           // Try to extract JSON: model sometimes wraps in ```json ... ```
