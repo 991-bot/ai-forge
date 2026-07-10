@@ -60,7 +60,7 @@ function BuilderPage() {
   useEffect(() => {
     if (!sessionId) return;
     supabase.from("builder_projects").select("*").eq("session_id", sessionId).order("created_at", { ascending: false }).limit(30)
-      .then(({ data }) => { if (data) setProjects(data as Project[]); });
+      .then(({ data }) => { if (data) setProjects(data as unknown as Project[]); });
   }, [sessionId]);
 
   useEffect(() => {
