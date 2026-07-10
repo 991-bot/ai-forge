@@ -199,8 +199,9 @@ function BuilderPage() {
         </div>
       </header>
 
-      <div className="grid h-[calc(100vh-53px)] grid-cols-1 md:grid-cols-[280px_1fr_1.4fr]">
+      <div className={`grid h-[calc(100vh-53px)] grid-cols-1 ${sidebarOpen ? "md:grid-cols-[280px_1fr_1.4fr]" : "md:grid-cols-[1fr_1.4fr]"}`}>
         {/* Projects sidebar */}
+        {sidebarOpen && (
         <aside className="hidden flex-col border-r md:flex">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Мои сайты</span>
