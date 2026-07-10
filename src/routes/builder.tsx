@@ -110,7 +110,8 @@ function BuilderPage() {
 
   function newProject() {
     setMessages([]); setCurrentHtml(""); setCurrentTitle(""); setInput("");
-    inputRef.current?.focus();
+    setSidebarOpen(false);
+    setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   function openProject(p: Project) {
