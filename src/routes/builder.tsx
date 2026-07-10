@@ -234,6 +234,9 @@ function BuilderPage() {
             ))}
           </div>
         </aside>
+        )}
+
+
 
         {/* Chat */}
         <section className="flex min-h-0 flex-col border-r">
