@@ -150,6 +150,13 @@ function BuilderPage() {
       {/* Top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b bg-background/80 px-4 py-2.5 backdrop-blur">
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSidebarOpen((s) => !s)}
+            className="hidden h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground md:grid"
+            title={sidebarOpen ? "Скрыть панель" : "Показать панель"}
+          >
+            {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+          </button>
           <Link to="/" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Профиль
           </Link>
