@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft, Monitor, Smartphone, Tablet, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft,
+  Monitor, Smartphone, Tablet, PanelLeftClose, PanelLeftOpen, Database, Inbox, FileText, Save,
+} from "lucide-react";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger,
   ContextMenuSeparator, ContextMenuSub, ContextMenuSubTrigger, ContextMenuSubContent,
@@ -12,56 +14,157 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/builder")({
   head: () => ({
     meta: [
-      { title: "AI Builder — сгенерируй сайт промптом" },
-      { name: "description", content: "Мини-Lovable: опиши сайт, получи полный HTML, редактируй через контекстное меню. История в облачной БД." },
+      { title: "AI Builder — сгенерируй сайт и управляй через CMS" },
+      { name: "description", content: "Мини-Lovable в браузере: опиши сайт, редактируй промптом и через встроенную React-CMS. Данные форм собираются локально." },
     ],
   }),
   component: BuilderPage,
 });
 
 type Msg = { role: "user" | "assistant"; content: string };
-type Project = { id: string; title: string; prompt: string; html: string; created_at: string };
+type Project = { id: string; title: string; prompt: string; html: string; messages: Msg[]; createdAt: number; updatedAt: number };
+type Submission = { id: string; formName: string; data: Record<string, string>; at: number };
 
-const SESSION_KEY = "builder-session-id";
-
-function getSessionId() {
-  if (typeof window === "undefined") return "";
-  let id = localStorage.getItem(SESSION_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(SESSION_KEY, id);
-  }
-  return id;
-}
+const LS_PROJECTS = "builder-projects-v2";
+const LS_SUBS = (pid: string) => `builder-subs-${pid}`;
 
 const STARTERS = [
   "Лендинг для кофейни в Осло, тёмная тема, минимализм",
   "Портфолио веб-дизайнера с 3D-эффектами и фиолетовыми градиентами",
-  "SaaS-лендинг для AI-стартапа, glassmorphism, hero с анимацией",
-  "Сайт-визитка для фотографа, крупная типографика, галерея",
+  "SaaS-лендинг для AI-стартапа, glassmorphism, hero с анимацией, форма подписки name+email",
+  "Сайт-визитка фотографа с формой обратной связи",
 ];
 
+// ---------- runtime injection: form capture + content edits bridge ----------
+const RUNTIME_SCRIPT = `<script>(function(){
+  if (window.__cmsBridge) return; window.__cmsBridge = 1;
+  document.addEventListener('submit', function(e){
+    var f = e.target;
+    if (!(f instanceof HTMLFormElement)) return;
+    e.preventDefault();
+    var data = {};
+    new FormData(f).forEach(function(v,k){ data[k] = typeof v === 'string' ? v : (v && v.name) || ''; });
+    parent.postMessage({ __cms:1, type:'submit', formName: f.getAttribute('name')||f.id||'form', data: data, at: Date.now() }, '*');
+    try { f.reset(); } catch(_){}
+    var t = document.createElement('div');
+    t.textContent = '✓ Отправлено — данные в CMS';
+    t.style.cssText='position:fixed;bottom:20px;right:20px;background:#0f172a;color:#fff;padding:10px 16px;border-radius:10px;font:500 14px system-ui;z-index:99999;box-shadow:0 8px 30px rgba(0,0,0,.3)';
+    document.body.appendChild(t); setTimeout(function(){t.remove();},2200);
+  }, true);
+  window.addEventListener('message', function(ev){
+    var m = ev.data; if (!m || m.__cms !== 1) return;
+    if (m.type === 'patch') {
+      try {
+        var el = document.querySelector(m.selector);
+        if (el) {
+          if (m.attr) el.setAttribute(m.attr, m.value);
+          else el.textContent = m.value;
+        }
+      } catch(_){}
+    }
+  });
+  parent.postMessage({ __cms:1, type:'ready' }, '*');
+})();</script>`;
+
+function injectRuntime(html: string): string {
+  if (!html) return html;
+  if (html.includes("__cmsBridge")) return html;
+  if (html.includes("</body>")) return html.replace("</body>", RUNTIME_SCRIPT + "</body>");
+  return html + RUNTIME_SCRIPT;
+}
+
+// ---------- content extraction for the CMS content editor ----------
+type ContentField = { selector: string; tag: string; attr?: string; value: string; label: string };
+
+function extractContent(html: string): ContentField[] {
+  if (typeof window === "undefined" || !html) return [];
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const fields: ContentField[] = [];
+  const tags = ["h1", "h2", "h3", "p", "a", "button", "li"] as const;
+  tags.forEach((tag) => {
+    const nodes = Array.from(doc.querySelectorAll(tag));
+    nodes.forEach((n, i) => {
+      const text = (n.textContent || "").trim();
+      if (!text || text.length > 240) return;
+      // build a stable-ish selector
+      const all = Array.from(doc.querySelectorAll(tag));
+      const idx = all.indexOf(n);
+      fields.push({ selector: `${tag}:nth-of-type(${idx + 1})`, tag, value: text, label: `${tag.toUpperCase()} #${i + 1}` });
+    });
+  });
+  Array.from(doc.querySelectorAll("img")).forEach((n, i) => {
+    const src = n.getAttribute("src") || "";
+    const all = Array.from(doc.querySelectorAll("img"));
+    const idx = all.indexOf(n);
+    fields.push({ selector: `img:nth-of-type(${idx + 1})`, tag: "img", attr: "src", value: src, label: `IMG #${i + 1}` });
+  });
+  return fields.slice(0, 60);
+}
+
+function applyContentPatch(html: string, patch: ContentField): string {
+  if (typeof window === "undefined") return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  try {
+    const el = doc.querySelector(patch.selector);
+    if (!el) return html;
+    if (patch.attr) el.setAttribute(patch.attr, patch.value);
+    else el.textContent = patch.value;
+  } catch { return html; }
+  return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+}
+
+// ---------- localStorage helpers ----------
+function loadProjects(): Project[] {
+  if (typeof window === "undefined") return [];
+  try { return JSON.parse(localStorage.getItem(LS_PROJECTS) || "[]"); } catch { return []; }
+}
+function saveProjects(p: Project[]) { localStorage.setItem(LS_PROJECTS, JSON.stringify(p)); }
+function loadSubs(pid: string): Submission[] {
+  try { return JSON.parse(localStorage.getItem(LS_SUBS(pid)) || "[]"); } catch { return []; }
+}
+function saveSubs(pid: string, s: Submission[]) { localStorage.setItem(LS_SUBS(pid), JSON.stringify(s)); }
+
 function BuilderPage() {
-  const [sessionId, setSessionId] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [currentHtml, setCurrentHtml] = useState<string>("");
   const [currentTitle, setCurrentTitle] = useState<string>("");
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"preview" | "code">("preview");
+  const [view, setView] = useState<"preview" | "code" | "cms">("preview");
   const [device, setDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [subs, setSubs] = useState<Submission[]>([]);
+  const [cmsTab, setCmsTab] = useState<"submissions" | "content">("submissions");
+  const [contentFields, setContentFields] = useState<ContentField[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  useEffect(() => { setSessionId(getSessionId()); }, []);
+  // hydrate
+  useEffect(() => { setProjects(loadProjects()); }, []);
 
+  // recompute content fields when html changes
+  useEffect(() => { setContentFields(extractContent(currentHtml)); }, [currentHtml]);
+
+  // load subs when active project changes
+  useEffect(() => { if (activeId) setSubs(loadSubs(activeId)); else setSubs([]); }, [activeId]);
+
+  // listen to iframe postMessages
   useEffect(() => {
-    if (!sessionId) return;
-    supabase.from("builder_projects").select("*").eq("session_id", sessionId).order("created_at", { ascending: false }).limit(30)
-      .then(({ data }) => { if (data) setProjects(data as unknown as Project[]); });
-  }, [sessionId]);
+    function onMsg(e: MessageEvent) {
+      const m = e.data;
+      if (!m || m.__cms !== 1) return;
+      if (m.type === "submit" && activeId) {
+        const s: Submission = { id: crypto.randomUUID(), formName: String(m.formName || "form"), data: m.data || {}, at: m.at || Date.now() };
+        setSubs((prev) => { const next = [s, ...prev]; saveSubs(activeId, next); return next; });
+        toast.success(`Форма «${s.formName}» — данные в CMS`);
+      }
+    }
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [activeId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -70,10 +173,20 @@ function BuilderPage() {
   useEffect(() => { inputRef.current?.focus(); }, [loading]);
 
   const deviceWidth = useMemo(() => ({ desktop: "100%", tablet: "768px", mobile: "390px" }[device]), [device]);
+  const injectedHtml = useMemo(() => injectRuntime(currentHtml), [currentHtml]);
+
+  const persistProject = useCallback((p: Project) => {
+    setProjects((prev) => {
+      const idx = prev.findIndex((x) => x.id === p.id);
+      const next = idx >= 0 ? prev.map((x) => (x.id === p.id ? p : x)) : [p, ...prev];
+      saveProjects(next);
+      return next;
+    });
+  }, []);
 
   async function send(text: string) {
     const prompt = text.trim();
-    if (!prompt || loading || !sessionId) return;
+    if (!prompt || loading) return;
     setInput("");
     const nextMessages: Msg[] = [...messages, { role: "user", content: prompt }];
     setMessages(nextMessages);
@@ -82,12 +195,12 @@ function BuilderPage() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages }),
+        body: JSON.stringify({ messages: nextMessages, currentHtml: currentHtml || undefined }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         if (res.status === 429) toast.error("Слишком много запросов. Подожди немного.");
-        else if (res.status === 402) toast.error("Закончились кредиты AI Gateway. Пополни рабочее пространство.");
+        else if (res.status === 402) toast.error("Закончились кредиты AI. Пополни рабочее пространство.");
         else toast.error(err.error || "Ошибка генерации");
         setMessages(nextMessages);
         return;
@@ -95,12 +208,16 @@ function BuilderPage() {
       const { html, title } = (await res.json()) as { html: string; title: string };
       setCurrentHtml(html);
       setCurrentTitle(title);
-      setMessages([...nextMessages, { role: "assistant", content: `Готово: **${title}** (${Math.round(html.length / 1024)} KB HTML). Кликни правой кнопкой по превью для быстрых правок.` }]);
+      const assistantMsg: Msg = { role: "assistant", content: `Готово: **${title}** (${Math.round(html.length / 1024)} KB). ${activeId ? "Правки применены к текущему сайту." : "ПКМ по превью → быстрые правки. Открой вкладку CMS для редактирования полей."}` };
+      const finalMessages = [...nextMessages, assistantMsg];
+      setMessages(finalMessages);
 
-      const { data } = await supabase.from("builder_projects").insert({
-        session_id: sessionId, title, prompt, html,
-      } as never).select().single();
-      if (data) setProjects((p) => [data as unknown as Project, ...p]);
+      const now = Date.now();
+      const proj: Project = activeId
+        ? { ...(projects.find((p) => p.id === activeId) as Project), title, html, messages: finalMessages, updatedAt: now }
+        : { id: crypto.randomUUID(), title, prompt, html, messages: finalMessages, createdAt: now, updatedAt: now };
+      if (!activeId) setActiveId(proj.id);
+      persistProject(proj);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Ошибка сети");
     } finally {
@@ -109,22 +226,25 @@ function BuilderPage() {
   }
 
   function newProject() {
-    setMessages([]); setCurrentHtml(""); setCurrentTitle(""); setInput("");
-    setSidebarOpen(false);
+    setActiveId(null);
+    setMessages([]); setCurrentHtml(""); setCurrentTitle(""); setInput(""); setSubs([]);
+    setSidebarOpen(false); setView("preview");
     setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   function openProject(p: Project) {
-    setMessages([
+    setActiveId(p.id);
+    setMessages(p.messages && p.messages.length ? p.messages : [
       { role: "user", content: p.prompt },
       { role: "assistant", content: `Открыто: **${p.title}**` },
     ]);
     setCurrentHtml(p.html); setCurrentTitle(p.title);
   }
 
-  async function deleteProject(id: string) {
-    await supabase.from("builder_projects").delete().eq("id", id);
-    setProjects((p) => p.filter((x) => x.id !== id));
+  function deleteProject(id: string) {
+    setProjects((prev) => { const next = prev.filter((x) => x.id !== id); saveProjects(next); return next; });
+    localStorage.removeItem(LS_SUBS(id));
+    if (activeId === id) newProject();
     toast.success("Удалено");
   }
 
@@ -136,25 +256,42 @@ function BuilderPage() {
     URL.revokeObjectURL(url);
   }
 
+  function patchField(f: ContentField, value: string) {
+    const nextField = { ...f, value };
+    setContentFields((prev) => prev.map((x) => (x.selector === f.selector && x.attr === f.attr ? nextField : x)));
+    // live patch iframe
+    iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "patch", selector: f.selector, attr: f.attr, value }, "*");
+    // patch stored html + persist
+    const nextHtml = applyContentPatch(currentHtml, nextField);
+    setCurrentHtml(nextHtml);
+    if (activeId) {
+      const proj = projects.find((p) => p.id === activeId);
+      if (proj) persistProject({ ...proj, html: nextHtml, updatedAt: Date.now() });
+    }
+  }
+
+  function clearSubs() {
+    if (!activeId) return;
+    saveSubs(activeId, []); setSubs([]); toast.success("Отправки очищены");
+  }
+
   const quickEdits = [
-    { label: "Сделай темнее / тёмная тема", prompt: "Переделай всю страницу в тёмную тему с глубоким фоном и мягкими акцентами." },
-    { label: "Больше анимаций", prompt: "Добавь больше плавных CSS-анимаций: hover, fade-in, параллакс, микроанимации." },
-    { label: "Glassmorphism", prompt: "Переделай в стиле glassmorphism: полупрозрачные карточки с блюром и градиентными подложками." },
-    { label: "Другая цветовая палитра", prompt: "Смени всю цветовую палитру на современную и необычную — предложи и применяй." },
-    { label: "Крупная типографика", prompt: "Сделай типографику намного крупнее и выразительнее, используй контрастные шрифты." },
-    { label: "Мобильная адаптация", prompt: "Убедись, что все секции идеально работают на мобильных, оптимизируй сетки и отступы." },
+    { label: "Сделай темнее / тёмная тема", prompt: "Переделай в глубокую тёмную тему с мягкими акцентами, сохрани контент." },
+    { label: "Больше анимаций", prompt: "Добавь плавные CSS-анимации: hover, fade-in, параллакс, микроанимации. Контент не трогай." },
+    { label: "Glassmorphism", prompt: "Переделай в glassmorphism: полупрозрачные карточки с блюром и градиентными подложками." },
+    { label: "Другая палитра", prompt: "Смени палитру на современную и необычную, контент сохрани." },
+    { label: "Крупная типографика", prompt: "Сделай типографику намного крупнее и выразительнее." },
+    { label: "Мобильная адаптация", prompt: "Оптимизируй все секции под мобильные, сохрани контент." },
+    { label: "Добавь форму подписки", prompt: "Добавь секцию с формой подписки (name, email) — не забудь <form name='subscribe'>." },
   ];
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b bg-background/80 px-4 py-2.5 backdrop-blur">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setSidebarOpen((s) => !s)}
+          <button onClick={() => setSidebarOpen((s) => !s)}
             className="hidden h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground md:grid"
-            title={sidebarOpen ? "Скрыть панель" : "Показать панель"}
-          >
+            title={sidebarOpen ? "Скрыть панель" : "Показать панель"}>
             {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
           <Link to="/" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -189,6 +326,11 @@ function BuilderPage() {
               className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${view === "code" ? "bg-accent" : "hover:bg-accent/50"}`}>
               <Code2 className="h-3.5 w-3.5" /> Код
             </button>
+            <button onClick={() => setView("cms")}
+              className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${view === "cms" ? "bg-accent" : "hover:bg-accent/50"}`}>
+              <Database className="h-3.5 w-3.5" /> CMS
+              {subs.length > 0 && <span className="ml-1 rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">{subs.length}</span>}
+            </button>
           </div>
           {currentHtml && (
             <button onClick={() => download(currentHtml, currentTitle)}
@@ -200,7 +342,6 @@ function BuilderPage() {
       </header>
 
       <div className={`grid h-[calc(100vh-53px)] grid-cols-1 ${sidebarOpen ? "md:grid-cols-[280px_1fr_1.4fr]" : "md:grid-cols-[1fr_1.4fr]"}`}>
-        {/* Projects sidebar */}
         {sidebarOpen && (
         <aside className="hidden flex-col border-r md:flex">
           <div className="flex items-center justify-between border-b px-3 py-2">
@@ -217,7 +358,7 @@ function BuilderPage() {
               <ContextMenu key={p.id}>
                 <ContextMenuTrigger>
                   <button onClick={() => openProject(p)}
-                    className="mb-1 w-full rounded-md p-2 text-left text-sm hover:bg-accent">
+                    className={`mb-1 w-full rounded-md p-2 text-left text-sm hover:bg-accent ${activeId === p.id ? "bg-accent" : ""}`}>
                     <div className="line-clamp-1 font-medium">{p.title}</div>
                     <div className="line-clamp-1 text-xs text-muted-foreground">{p.prompt}</div>
                   </button>
@@ -233,12 +374,12 @@ function BuilderPage() {
               </ContextMenu>
             ))}
           </div>
+          <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
+            Данные в localStorage браузера
+          </div>
         </aside>
         )}
 
-
-
-        {/* Chat */}
         <section className="flex min-h-0 flex-col border-r">
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.length === 0 && (
@@ -248,7 +389,7 @@ function BuilderPage() {
                     <Sparkles className="h-6 w-6 text-white" />
                   </div>
                   <h2 className="mt-3 font-display text-xl font-bold">Опиши сайт</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">ИИ сгенерирует готовый HTML со стилями и анимацией.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">ИИ сгенерирует HTML. Дальше правки идут в этот же сайт.</p>
                 </div>
                 <div className="space-y-2">
                   {STARTERS.map((s) => (
@@ -273,7 +414,7 @@ function BuilderPage() {
             {loading && (
               <div className="flex justify-start">
                 <div className="inline-flex items-center gap-2 rounded-2xl bg-muted px-3.5 py-2 text-sm">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Генерирую сайт…
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {activeId ? "Правлю сайт…" : "Генерирую сайт…"}
                 </div>
               </div>
             )}
@@ -281,13 +422,10 @@ function BuilderPage() {
           <div className="border-t p-3">
             <form onSubmit={(e) => { e.preventDefault(); send(input); }} className="relative">
               <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
+                ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
-                placeholder={messages.length === 0 ? "Опиши, какой сайт создать…" : "Что изменить?"}
-                rows={2}
-                disabled={loading}
+                placeholder={messages.length === 0 ? "Опиши, какой сайт создать…" : "Что изменить в этом сайте?"}
+                rows={2} disabled={loading}
                 className="w-full resize-none rounded-xl border bg-background p-3 pr-12 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
               />
               <button type="submit" disabled={loading || !input.trim()}
@@ -296,11 +434,12 @@ function BuilderPage() {
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </button>
             </form>
-            <p className="mt-1.5 text-[11px] text-muted-foreground">Enter — отправить · Shift+Enter — новая строка · ПКМ по превью → быстрые правки</p>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {activeId ? "Правки применяются к текущему сайту · " : ""}Enter — отправить · ПКМ по превью — быстрые правки
+            </p>
           </div>
         </section>
 
-        {/* Preview */}
         <section className="min-h-0 bg-muted/40">
           {!currentHtml ? (
             <div className="grid h-full place-items-center p-8 text-center text-muted-foreground">
@@ -308,9 +447,16 @@ function BuilderPage() {
                 <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-background border">
                   <Eye className="h-6 w-6" />
                 </div>
-                <p>Превью появится здесь после первой генерации</p>
+                <p>Превью появится после первой генерации</p>
               </div>
             </div>
+          ) : view === "cms" ? (
+            <CmsPanel
+              tab={cmsTab} setTab={setCmsTab}
+              subs={subs} clearSubs={clearSubs}
+              fields={contentFields} onPatch={patchField}
+              hasProject={!!activeId}
+            />
           ) : (
             <ContextMenu>
               <ContextMenuTrigger asChild>
@@ -318,9 +464,9 @@ function BuilderPage() {
                   <div className="mx-auto h-full rounded-xl border bg-white shadow-sm transition-all" style={{ maxWidth: deviceWidth }}>
                     {view === "preview" ? (
                       <iframe
-                        title="preview"
-                        srcDoc={currentHtml}
-                        sandbox="allow-scripts"
+                        ref={iframeRef} title="preview"
+                        srcDoc={injectedHtml}
+                        sandbox="allow-scripts allow-forms"
                         className="h-full w-full rounded-xl"
                       />
                     ) : (
@@ -341,6 +487,7 @@ function BuilderPage() {
                   </ContextMenuSubContent>
                 </ContextMenuSub>
                 <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => setView("cms")}><Database className="mr-2 h-4 w-4" />Открыть CMS</ContextMenuItem>
                 <ContextMenuItem onClick={() => setView(view === "preview" ? "code" : "preview")}>
                   {view === "preview" ? <><Code2 className="mr-2 h-4 w-4" />Показать код</> : <><Eye className="mr-2 h-4 w-4" />Показать превью</>}
                 </ContextMenuItem>
@@ -355,6 +502,111 @@ function BuilderPage() {
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function CmsPanel({
+  tab, setTab, subs, clearSubs, fields, onPatch, hasProject,
+}: {
+  tab: "submissions" | "content"; setTab: (t: "submissions" | "content") => void;
+  subs: Submission[]; clearSubs: () => void;
+  fields: ContentField[]; onPatch: (f: ContentField, v: string) => void;
+  hasProject: boolean;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex items-center justify-between border-b px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-primary" />
+          <span className="font-semibold">React CMS</span>
+          <span className="text-xs text-muted-foreground">· локальная</span>
+        </div>
+        <div className="flex items-center gap-0.5 rounded-lg border p-0.5">
+          <button onClick={() => setTab("submissions")}
+            className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${tab === "submissions" ? "bg-accent" : "hover:bg-accent/50"}`}>
+            <Inbox className="h-3.5 w-3.5" /> Отправки {subs.length > 0 && <span className="ml-1 text-muted-foreground">({subs.length})</span>}
+          </button>
+          <button onClick={() => setTab("content")}
+            className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${tab === "content" ? "bg-accent" : "hover:bg-accent/50"}`}>
+            <FileText className="h-3.5 w-3.5" /> Контент
+          </button>
+        </div>
+      </div>
+      {!hasProject ? (
+        <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
+          Сначала сгенерируй сайт — CMS привязана к проекту.
+        </div>
+      ) : tab === "submissions" ? (
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Данные из форм на превью сохраняются здесь автоматически.</p>
+            {subs.length > 0 && (
+              <button onClick={clearSubs} className="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent">
+                <Trash2 className="h-3 w-3" /> Очистить
+              </button>
+            )}
+          </div>
+          {subs.length === 0 ? (
+            <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+              Пока пусто. Отправь форму на превью — она появится тут.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {subs.map((s) => (
+                <div key={s.id} className="rounded-xl border bg-card p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{s.formName}</span>
+                      <span className="text-xs text-muted-foreground">{new Date(s.at).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5 text-sm">
+                    {Object.entries(s.data).map(([k, v]) => (
+                      <div key={k} className="grid grid-cols-[120px_1fr] gap-2">
+                        <span className="truncate text-muted-foreground">{k}</span>
+                        <span className="break-words font-medium">{v || <em className="text-muted-foreground">—</em>}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4">
+          <p className="mb-3 text-sm text-muted-foreground">Правь тексты и картинки. Изменения применяются к превью и сохраняются.</p>
+          {fields.length === 0 ? (
+            <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">Не нашёл редактируемых полей.</div>
+          ) : (
+            <div className="space-y-3">
+              {fields.map((f, i) => (
+                <div key={f.selector + i} className="rounded-lg border bg-card p-3">
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase">{f.label}</span>
+                    {f.attr && <span className="text-[10px] text-muted-foreground">attr={f.attr}</span>}
+                  </div>
+                  {f.tag === "p" || (f.value && f.value.length > 60) ? (
+                    <textarea
+                      defaultValue={f.value} rows={3}
+                      onBlur={(e) => e.target.value !== f.value && onPatch(f, e.target.value)}
+                      className="w-full resize-none rounded-md border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  ) : (
+                    <input
+                      defaultValue={f.value}
+                      onBlur={(e) => e.target.value !== f.value && onPatch(f, e.target.value)}
+                      className="w-full rounded-md border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  )}
+                </div>
+              ))}
+              <p className="pt-2 text-[11px] text-muted-foreground"><Save className="mr-1 inline h-3 w-3" />Сохраняется при потере фокуса поля.</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
