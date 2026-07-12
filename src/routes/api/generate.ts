@@ -34,7 +34,10 @@ export const Route = createFileRoute("/api/generate")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const { messages } = (await request.json()) as { messages?: ChatMsg[] };
+        const { messages, currentHtml } = (await request.json()) as {
+          messages?: ChatMsg[];
+          currentHtml?: string;
+        };
         if (!Array.isArray(messages) || messages.length === 0) {
           return new Response("messages required", { status: 400 });
         }
@@ -42,11 +45,27 @@ export const Route = createFileRoute("/api/generate")({
         if (!key) return new Response("Missing LOVABLE_API_KEY", { status: 500 });
 
         const gateway = createLovableAiGatewayProvider(key);
+
+        // If we have an existing site, prepend it as context so the model edits, not recreates.
+        const finalMessages: ChatMsg[] = currentHtml
+          ? [
+              {
+                role: "user",
+                content:
+                  "Вот ТЕКУЩИЙ HTML сайта. Применяй правки к нему, сохраняй общую структуру и уже введённый контент. Возвращай ПОЛНЫЙ обновлённый HTML.\n\n```html\n" +
+                  currentHtml.slice(0, 60000) +
+                  "\n```",
+              },
+              { role: "assistant", content: "Понял, применяю правки к текущему сайту." },
+              ...messages,
+            ]
+          : messages;
+
         try {
           const { text } = await generateText({
             model: gateway("google/gemini-3-flash-preview"),
             system: SYSTEM_PROMPT,
-            messages: messages.map((m) => ({ role: m.role, content: m.content })),
+            messages: finalMessages.map((m) => ({ role: m.role, content: m.content })),
           });
           const html = extractHtml(text);
           const title = extractTitle(html);
