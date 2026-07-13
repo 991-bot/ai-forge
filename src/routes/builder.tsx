@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, Send, Loader2, Trash2, Download, Eye, Code2, Plus, ArrowLeft,
   Monitor, Smartphone, Tablet, PanelLeftClose, PanelLeftOpen, Database, Inbox, FileText, Save,
+  MousePointer2, Undo2, Redo2, X, Type, Palette, Layers,
 } from "lucide-react";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger,
@@ -14,8 +15,8 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/builder")({
   head: () => ({
     meta: [
-      { title: "AI Builder — сгенерируй сайт и управляй через CMS" },
-      { name: "description", content: "Мини-Lovable в браузере: опиши сайт, редактируй промптом и через встроенную React-CMS. Данные форм собираются локально." },
+      { title: "AI Builder — визуальный редактор сайтов" },
+      { name: "description", content: "Создай сайт промптом, отредактируй визуально в WYSIWYG-режиме и собирай данные форм через встроенную CMS." },
     ],
   }),
   component: BuilderPage,
@@ -24,6 +25,12 @@ export const Route = createFileRoute("/builder")({
 type Msg = { role: "user" | "assistant"; content: string };
 type Project = { id: string; title: string; prompt: string; html: string; messages: Msg[]; createdAt: number; updatedAt: number };
 type Submission = { id: string; formName: string; data: Record<string, string>; at: number };
+type Selected = {
+  selector: string;
+  tag: string;
+  text: string;
+  styles: { color: string; backgroundColor: string; fontSize: string; fontWeight: string; textAlign: string; padding: string; margin: string; fontFamily: string };
+};
 
 const LS_PROJECTS = "builder-projects-v2";
 const LS_SUBS = (pid: string) => `builder-subs-${pid}`;
@@ -35,9 +42,65 @@ const STARTERS = [
   "Сайт-визитка фотографа с формой обратной связи",
 ];
 
-// ---------- runtime injection: form capture + content edits bridge ----------
+// ---------- runtime injection: form capture + content edits + visual editor bridge ----------
 const RUNTIME_SCRIPT = `<script>(function(){
   if (window.__cmsBridge) return; window.__cmsBridge = 1;
+  var visual = false;
+  var lastHover = null; var lastSel = null;
+
+  function css(el){
+    if (!el || el === document.body) return 'body';
+    var parts = []; var node = el;
+    while (node && node.nodeType === 1 && node !== document.body) {
+      var name = node.tagName.toLowerCase();
+      var parent = node.parentNode;
+      if (parent) {
+        var siblings = Array.from(parent.children).filter(function(c){ return c.tagName === node.tagName; });
+        if (siblings.length > 1) name += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+      }
+      parts.unshift(name);
+      node = parent;
+    }
+    return 'body>' + parts.join('>');
+  }
+
+  function outline(el, color){
+    if (!el) return;
+    el.style.outline = '2px solid ' + color;
+    el.style.outlineOffset = '2px';
+  }
+  function unoutline(el){ if (el) { el.style.outline=''; el.style.outlineOffset=''; } }
+
+  function select(el){
+    unoutline(lastSel); lastSel = el; outline(el, '#3b82f6');
+    var cs = getComputedStyle(el);
+    parent.postMessage({ __cms:1, type:'select', selector: css(el), tag: el.tagName.toLowerCase(),
+      text: el.children.length === 0 ? (el.textContent||'').trim() : '',
+      styles: {
+        color: cs.color, backgroundColor: cs.backgroundColor, fontSize: cs.fontSize,
+        fontWeight: cs.fontWeight, textAlign: cs.textAlign, padding: cs.padding,
+        margin: cs.margin, fontFamily: cs.fontFamily,
+      }
+    }, '*');
+  }
+
+  document.addEventListener('mouseover', function(e){
+    if (!visual) return;
+    if (e.target === lastSel) return;
+    unoutline(lastHover); lastHover = e.target; outline(lastHover, '#93c5fd');
+  }, true);
+  document.addEventListener('mouseout', function(e){
+    if (!visual) return;
+    if (e.target === lastSel) return;
+    unoutline(e.target);
+  }, true);
+  document.addEventListener('click', function(e){
+    if (!visual) return;
+    e.preventDefault(); e.stopPropagation();
+    unoutline(lastHover); lastHover = null;
+    select(e.target);
+  }, true);
+
   document.addEventListener('submit', function(e){
     var f = e.target;
     if (!(f instanceof HTMLFormElement)) return;
@@ -51,8 +114,14 @@ const RUNTIME_SCRIPT = `<script>(function(){
     t.style.cssText='position:fixed;bottom:20px;right:20px;background:#0f172a;color:#fff;padding:10px 16px;border-radius:10px;font:500 14px system-ui;z-index:99999;box-shadow:0 8px 30px rgba(0,0,0,.3)';
     document.body.appendChild(t); setTimeout(function(){t.remove();},2200);
   }, true);
+
   window.addEventListener('message', function(ev){
     var m = ev.data; if (!m || m.__cms !== 1) return;
+    if (m.type === 'mode') {
+      visual = !!m.visual;
+      if (!visual) { unoutline(lastHover); unoutline(lastSel); lastHover=null; lastSel=null; }
+      document.body.style.cursor = visual ? 'crosshair' : '';
+    }
     if (m.type === 'patch') {
       try {
         var el = document.querySelector(m.selector);
@@ -62,6 +131,16 @@ const RUNTIME_SCRIPT = `<script>(function(){
         }
       } catch(_){}
     }
+    if (m.type === 'setText' && lastSel) { lastSel.textContent = m.value; }
+    if (m.type === 'setStyle' && lastSel) {
+      for (var k in m.styles) { try { lastSel.style.setProperty(k, m.styles[k]); } catch(_){} }
+    }
+    if (m.type === 'requestHtml') {
+      unoutline(lastHover); unoutline(lastSel);
+      parent.postMessage({ __cms:1, type:'html', html: '<!DOCTYPE html>\\n' + document.documentElement.outerHTML }, '*');
+      if (lastSel) outline(lastSel, '#3b82f6');
+    }
+    if (m.type === 'deselect') { unoutline(lastSel); lastSel=null; }
   });
   parent.postMessage({ __cms:1, type:'ready' }, '*');
 })();</script>`;
@@ -86,7 +165,6 @@ function extractContent(html: string): ContentField[] {
     nodes.forEach((n, i) => {
       const text = (n.textContent || "").trim();
       if (!text || text.length > 240) return;
-      // build a stable-ish selector
       const all = Array.from(doc.querySelectorAll(tag));
       const idx = all.indexOf(n);
       fields.push({ selector: `${tag}:nth-of-type(${idx + 1})`, tag, value: text, label: `${tag.toUpperCase()} #${i + 1}` });
@@ -138,20 +216,26 @@ function BuilderPage() {
   const [subs, setSubs] = useState<Submission[]>([]);
   const [cmsTab, setCmsTab] = useState<"submissions" | "content">("submissions");
   const [contentFields, setContentFields] = useState<ContentField[]>([]);
+  const [visualMode, setVisualMode] = useState(false);
+  const [selected, setSelected] = useState<Selected | null>(null);
+  const historyRef = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
+  const [historyTick, setHistoryTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const pendingSaveRef = useRef<((html: string) => void) | null>(null);
 
-  // hydrate
   useEffect(() => { setProjects(loadProjects()); }, []);
-
-  // recompute content fields when html changes
   useEffect(() => { setContentFields(extractContent(currentHtml)); }, [currentHtml]);
-
-  // load subs when active project changes
   useEffect(() => { if (activeId) setSubs(loadSubs(activeId)); else setSubs([]); }, [activeId]);
 
-  // listen to iframe postMessages
+  // Toggle visual mode inside iframe
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "mode", visual: visualMode }, "*");
+    if (!visualMode) setSelected(null);
+  }, [visualMode, view, currentHtml]);
+
+  // iframe → parent messages
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       const m = e.data;
@@ -161,15 +245,24 @@ function BuilderPage() {
         setSubs((prev) => { const next = [s, ...prev]; saveSubs(activeId, next); return next; });
         toast.success(`Форма «${s.formName}» — данные в CMS`);
       }
+      if (m.type === "select") {
+        setSelected({ selector: m.selector, tag: m.tag, text: m.text, styles: m.styles });
+      }
+      if (m.type === "html" && pendingSaveRef.current) {
+        pendingSaveRef.current(m.html);
+        pendingSaveRef.current = null;
+      }
+      if (m.type === "ready" && visualMode) {
+        e.source && (e.source as Window).postMessage({ __cms: 1, type: "mode", visual: true }, "*");
+      }
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [activeId]);
+  }, [activeId, visualMode]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
-
   useEffect(() => { inputRef.current?.focus(); }, [loading]);
 
   const deviceWidth = useMemo(() => ({ desktop: "100%", tablet: "768px", mobile: "390px" }[device]), [device]);
@@ -183,6 +276,59 @@ function BuilderPage() {
       return next;
     });
   }, []);
+
+  const commitHtml = useCallback((next: string, opts?: { pushHistory?: boolean }) => {
+    if (opts?.pushHistory !== false && currentHtml && next !== currentHtml) {
+      historyRef.current.past.push(currentHtml);
+      if (historyRef.current.past.length > 50) historyRef.current.past.shift();
+      historyRef.current.future = [];
+      setHistoryTick((t) => t + 1);
+    }
+    setCurrentHtml(next);
+    if (activeId) {
+      const proj = projects.find((p) => p.id === activeId);
+      if (proj) persistProject({ ...proj, html: next, updatedAt: Date.now() });
+    }
+  }, [currentHtml, activeId, projects, persistProject]);
+
+  const captureHtml = useCallback((cb: (html: string) => void) => {
+    pendingSaveRef.current = cb;
+    iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "requestHtml" }, "*");
+  }, []);
+
+  function undo() {
+    const html = historyRef.current.past.pop();
+    if (!html) return;
+    historyRef.current.future.unshift(currentHtml);
+    setHistoryTick((t) => t + 1);
+    setCurrentHtml(html);
+    if (activeId) {
+      const proj = projects.find((p) => p.id === activeId);
+      if (proj) persistProject({ ...proj, html, updatedAt: Date.now() });
+    }
+  }
+  function redo() {
+    const html = historyRef.current.future.shift();
+    if (!html) return;
+    historyRef.current.past.push(currentHtml);
+    setHistoryTick((t) => t + 1);
+    setCurrentHtml(html);
+    if (activeId) {
+      const proj = projects.find((p) => p.id === activeId);
+      if (proj) persistProject({ ...proj, html, updatedAt: Date.now() });
+    }
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((e.key === "y") || (e.key === "z" && e.shiftKey)) { e.preventDefault(); redo(); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentHtml, activeId]);
 
   async function send(text: string) {
     const prompt = text.trim();
@@ -206,9 +352,9 @@ function BuilderPage() {
         return;
       }
       const { html, title } = (await res.json()) as { html: string; title: string };
-      setCurrentHtml(html);
+      commitHtml(html);
       setCurrentTitle(title);
-      const assistantMsg: Msg = { role: "assistant", content: `Готово: **${title}** (${Math.round(html.length / 1024)} KB). ${activeId ? "Правки применены к текущему сайту." : "ПКМ по превью → быстрые правки. Открой вкладку CMS для редактирования полей."}` };
+      const assistantMsg: Msg = { role: "assistant", content: `Готово: **${title}** (${Math.round(html.length / 1024)} KB). Клик по «Визуал» — редактирование прямо на превью.` };
       const finalMessages = [...nextMessages, assistantMsg];
       setMessages(finalMessages);
 
@@ -228,7 +374,8 @@ function BuilderPage() {
   function newProject() {
     setActiveId(null);
     setMessages([]); setCurrentHtml(""); setCurrentTitle(""); setInput(""); setSubs([]);
-    setSidebarOpen(false); setView("preview");
+    setSidebarOpen(false); setView("preview"); setVisualMode(false); setSelected(null);
+    historyRef.current = { past: [], future: [] };
     setTimeout(() => inputRef.current?.focus(), 0);
   }
 
@@ -239,6 +386,8 @@ function BuilderPage() {
       { role: "assistant", content: `Открыто: **${p.title}**` },
     ]);
     setCurrentHtml(p.html); setCurrentTitle(p.title);
+    historyRef.current = { past: [], future: [] };
+    setSelected(null);
   }
 
   function deleteProject(id: string) {
@@ -259,15 +408,9 @@ function BuilderPage() {
   function patchField(f: ContentField, value: string) {
     const nextField = { ...f, value };
     setContentFields((prev) => prev.map((x) => (x.selector === f.selector && x.attr === f.attr ? nextField : x)));
-    // live patch iframe
     iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "patch", selector: f.selector, attr: f.attr, value }, "*");
-    // patch stored html + persist
     const nextHtml = applyContentPatch(currentHtml, nextField);
-    setCurrentHtml(nextHtml);
-    if (activeId) {
-      const proj = projects.find((p) => p.id === activeId);
-      if (proj) persistProject({ ...proj, html: nextHtml, updatedAt: Date.now() });
-    }
+    commitHtml(nextHtml);
   }
 
   function clearSubs() {
@@ -275,15 +418,37 @@ function BuilderPage() {
     saveSubs(activeId, []); setSubs([]); toast.success("Отправки очищены");
   }
 
+  // Visual-mode edits: apply live to iframe, then capture full HTML back
+  function applyStyle(styleUpdates: Partial<Selected["styles"]>) {
+    if (!selected) return;
+    setSelected({ ...selected, styles: { ...selected.styles, ...styleUpdates } });
+    // convert to CSS property names (camelCase → kebab)
+    const cssStyles: Record<string, string> = {};
+    Object.entries(styleUpdates).forEach(([k, v]) => {
+      cssStyles[k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())] = v as string;
+    });
+    iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "setStyle", styles: cssStyles }, "*");
+    captureHtml((html) => commitHtml(html));
+  }
+  function applyText(value: string) {
+    if (!selected) return;
+    setSelected({ ...selected, text: value });
+    iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "setText", value }, "*");
+    captureHtml((html) => commitHtml(html));
+  }
+
   const quickEdits = [
     { label: "Сделай темнее / тёмная тема", prompt: "Переделай в глубокую тёмную тему с мягкими акцентами, сохрани контент." },
-    { label: "Больше анимаций", prompt: "Добавь плавные CSS-анимации: hover, fade-in, параллакс, микроанимации. Контент не трогай." },
-    { label: "Glassmorphism", prompt: "Переделай в glassmorphism: полупрозрачные карточки с блюром и градиентными подложками." },
-    { label: "Другая палитра", prompt: "Смени палитру на современную и необычную, контент сохрани." },
+    { label: "Больше анимаций", prompt: "Добавь плавные CSS-анимации: hover, fade-in, параллакс, микроанимации." },
+    { label: "Glassmorphism", prompt: "Переделай в glassmorphism: полупрозрачные карточки с блюром." },
+    { label: "Другая палитра", prompt: "Смени палитру на современную и необычную." },
     { label: "Крупная типографика", prompt: "Сделай типографику намного крупнее и выразительнее." },
-    { label: "Мобильная адаптация", prompt: "Оптимизируй все секции под мобильные, сохрани контент." },
-    { label: "Добавь форму подписки", prompt: "Добавь секцию с формой подписки (name, email) — не забудь <form name='subscribe'>." },
+    { label: "Мобильная адаптация", prompt: "Оптимизируй все секции под мобильные." },
   ];
+
+  const canUndo = historyRef.current.past.length > 0;
+  const canRedo = historyRef.current.future.length > 0;
+  void historyTick;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -306,6 +471,26 @@ function BuilderPage() {
           {currentTitle && <span className="hidden text-sm text-muted-foreground md:inline">— {currentTitle}</span>}
         </div>
         <div className="flex items-center gap-2">
+          {currentHtml && view === "preview" && (
+            <>
+              <button
+                onClick={() => setVisualMode((v) => !v)}
+                className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm ${visualMode ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+                title="Визуальное редактирование">
+                <MousePointer2 className="h-4 w-4" /> Визуал
+              </button>
+              <div className="hidden items-center gap-0.5 rounded-lg border p-0.5 md:flex">
+                <button onClick={undo} disabled={!canUndo}
+                  className="grid h-7 w-8 place-items-center rounded hover:bg-accent/50 disabled:opacity-30" title="Отменить (Ctrl+Z)">
+                  <Undo2 className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={redo} disabled={!canRedo}
+                  className="grid h-7 w-8 place-items-center rounded hover:bg-accent/50 disabled:opacity-30" title="Повторить (Ctrl+Y)">
+                  <Redo2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </>
+          )}
           <div className="hidden items-center gap-0.5 rounded-lg border p-0.5 md:flex">
             {(["desktop", "tablet", "mobile"] as const).map((d) => {
               const Icon = { desktop: Monitor, tablet: Tablet, mobile: Smartphone }[d];
@@ -322,11 +507,11 @@ function BuilderPage() {
               className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${view === "preview" ? "bg-accent" : "hover:bg-accent/50"}`}>
               <Eye className="h-3.5 w-3.5" /> Превью
             </button>
-            <button onClick={() => setView("code")}
+            <button onClick={() => { setView("code"); setVisualMode(false); }}
               className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${view === "code" ? "bg-accent" : "hover:bg-accent/50"}`}>
               <Code2 className="h-3.5 w-3.5" /> Код
             </button>
-            <button onClick={() => setView("cms")}
+            <button onClick={() => { setView("cms"); setVisualMode(false); }}
               className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs ${view === "cms" ? "bg-accent" : "hover:bg-accent/50"}`}>
               <Database className="h-3.5 w-3.5" /> CMS
               {subs.length > 0 && <span className="ml-1 rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">{subs.length}</span>}
@@ -375,7 +560,7 @@ function BuilderPage() {
             ))}
           </div>
           <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
-            Данные в localStorage браузера
+            localStorage · Ctrl+Z / Ctrl+Y
           </div>
         </aside>
         )}
@@ -389,7 +574,7 @@ function BuilderPage() {
                     <Sparkles className="h-6 w-6 text-white" />
                   </div>
                   <h2 className="mt-3 font-display text-xl font-bold">Опиши сайт</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">ИИ сгенерирует HTML. Дальше правки идут в этот же сайт.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">ИИ сгенерирует HTML. Дальше — визуальное редактирование или правки промптом.</p>
                 </div>
                 <div className="space-y-2">
                   {STARTERS.map((s) => (
@@ -424,7 +609,7 @@ function BuilderPage() {
               <textarea
                 ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
-                placeholder={messages.length === 0 ? "Опиши, какой сайт создать…" : "Что изменить в этом сайте?"}
+                placeholder={messages.length === 0 ? "Опиши, какой сайт создать…" : "Что изменить?"}
                 rows={2} disabled={loading}
                 className="w-full resize-none rounded-xl border bg-background p-3 pr-12 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
               />
@@ -435,12 +620,12 @@ function BuilderPage() {
               </button>
             </form>
             <p className="mt-1.5 text-[11px] text-muted-foreground">
-              {activeId ? "Правки применяются к текущему сайту · " : ""}Enter — отправить · ПКМ по превью — быстрые правки
+              Enter — отправить · включи «Визуал» и кликай по элементам на превью
             </p>
           </div>
         </section>
 
-        <section className="min-h-0 bg-muted/40">
+        <section className="relative min-h-0 bg-muted/40">
           {!currentHtml ? (
             <div className="grid h-full place-items-center p-8 text-center text-muted-foreground">
               <div>
@@ -461,12 +646,12 @@ function BuilderPage() {
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <div className="h-full overflow-auto p-4">
-                  <div className="mx-auto h-full rounded-xl border bg-white shadow-sm transition-all" style={{ maxWidth: deviceWidth }}>
+                  <div className={`mx-auto h-full rounded-xl border bg-white shadow-sm transition-all ${visualMode ? "ring-2 ring-primary" : ""}`} style={{ maxWidth: deviceWidth }}>
                     {view === "preview" ? (
                       <iframe
                         ref={iframeRef} title="preview"
                         srcDoc={injectedHtml}
-                        sandbox="allow-scripts allow-forms"
+                        sandbox="allow-scripts allow-forms allow-same-origin"
                         className="h-full w-full rounded-xl"
                       />
                     ) : (
@@ -487,6 +672,9 @@ function BuilderPage() {
                   </ContextMenuSubContent>
                 </ContextMenuSub>
                 <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => setVisualMode((v) => !v)}>
+                  <MousePointer2 className="mr-2 h-4 w-4" />{visualMode ? "Выйти из Визуала" : "Включить Визуал"}
+                </ContextMenuItem>
                 <ContextMenuItem onClick={() => setView("cms")}><Database className="mr-2 h-4 w-4" />Открыть CMS</ContextMenuItem>
                 <ContextMenuItem onClick={() => setView(view === "preview" ? "code" : "preview")}>
                   {view === "preview" ? <><Code2 className="mr-2 h-4 w-4" />Показать код</> : <><Eye className="mr-2 h-4 w-4" />Показать превью</>}
@@ -494,13 +682,142 @@ function BuilderPage() {
                 <ContextMenuItem onClick={() => download(currentHtml, currentTitle)}>
                   <Download className="mr-2 h-4 w-4" />Скачать HTML
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => { navigator.clipboard.writeText(currentHtml); toast.success("HTML скопирован"); }}>
-                  Копировать HTML
-                </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
           )}
+
+          {/* Floating visual editor panel */}
+          {view === "preview" && visualMode && selected && (
+            <VisualPanel
+              selected={selected}
+              onText={applyText}
+              onStyle={applyStyle}
+              onClose={() => {
+                iframeRef.current?.contentWindow?.postMessage({ __cms: 1, type: "deselect" }, "*");
+                setSelected(null);
+              }}
+            />
+          )}
+          {view === "preview" && visualMode && !selected && (
+            <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-foreground/90 px-4 py-2 text-xs text-background shadow-lg">
+              Кликни любой элемент на превью для редактирования
+            </div>
+          )}
         </section>
+      </div>
+    </div>
+  );
+}
+
+function VisualPanel({
+  selected, onText, onStyle, onClose,
+}: {
+  selected: Selected;
+  onText: (v: string) => void;
+  onStyle: (u: Partial<Selected["styles"]>) => void;
+  onClose: () => void;
+}) {
+  const s = selected.styles;
+  const rgbToHex = (rgb: string) => {
+    const m = rgb.match(/\d+/g);
+    if (!m || m.length < 3) return "#000000";
+    return "#" + [m[0], m[1], m[2]].map((n) => Number(n).toString(16).padStart(2, "0")).join("");
+  };
+  const fontPx = parseInt(s.fontSize) || 16;
+
+  return (
+    <div className="absolute right-4 top-4 z-30 w-72 rounded-xl border bg-background shadow-2xl">
+      <div className="flex items-center justify-between border-b px-3 py-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Layers className="h-4 w-4 text-primary" />
+          <span className="font-mono text-xs">{selected.tag}</span>
+        </div>
+        <button onClick={onClose} className="grid h-6 w-6 place-items-center rounded hover:bg-accent">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-[70vh] space-y-3 overflow-y-auto p-3">
+        {selected.text !== "" && (
+          <div>
+            <label className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase text-muted-foreground">
+              <Type className="h-3 w-3" /> Текст
+            </label>
+            <textarea
+              value={selected.text}
+              onChange={(e) => onText(e.target.value)}
+              rows={selected.text.length > 60 ? 3 : 1}
+              className="w-full resize-none rounded-md border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase text-muted-foreground">
+              <Palette className="h-3 w-3" /> Цвет
+            </label>
+            <input type="color" value={rgbToHex(s.color)} onChange={(e) => onStyle({ color: e.target.value })}
+              className="h-8 w-full cursor-pointer rounded border" />
+          </div>
+          <div>
+            <label className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase text-muted-foreground">
+              Фон
+            </label>
+            <input type="color" value={rgbToHex(s.backgroundColor)} onChange={(e) => onStyle({ backgroundColor: e.target.value })}
+              className="h-8 w-full cursor-pointer rounded border" />
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase text-muted-foreground">
+            <span>Размер шрифта</span><span className="font-mono normal-case">{fontPx}px</span>
+          </label>
+          <input type="range" min={8} max={120} value={fontPx}
+            onChange={(e) => onStyle({ fontSize: `${e.target.value}px` })}
+            className="w-full" />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Жирность</label>
+          <div className="grid grid-cols-4 gap-1">
+            {["300", "400", "600", "800"].map((w) => (
+              <button key={w} onClick={() => onStyle({ fontWeight: w })}
+                className={`rounded border px-2 py-1 text-xs ${s.fontWeight === w ? "border-primary bg-primary/10" : "hover:bg-accent"}`}>
+                {w}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Выравнивание</label>
+          <div className="grid grid-cols-4 gap-1">
+            {(["left", "center", "right", "justify"] as const).map((a) => (
+              <button key={a} onClick={() => onStyle({ textAlign: a })}
+                className={`rounded border px-2 py-1 text-xs capitalize ${s.textAlign === a ? "border-primary bg-primary/10" : "hover:bg-accent"}`}>
+                {a}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Padding</label>
+          <input type="text" defaultValue={s.padding}
+            onBlur={(e) => e.target.value !== s.padding && onStyle({ padding: e.target.value })}
+            placeholder="16px или 8px 16px"
+            className="w-full rounded-md border bg-background p-1.5 font-mono text-xs outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Margin</label>
+          <input type="text" defaultValue={s.margin}
+            onBlur={(e) => e.target.value !== s.margin && onStyle({ margin: e.target.value })}
+            placeholder="0 auto"
+            className="w-full rounded-md border bg-background p-1.5 font-mono text-xs outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+        <p className="pt-1 text-[10px] text-muted-foreground">
+          <Save className="mr-1 inline h-3 w-3" />Автосохранение в localStorage · Ctrl+Z отменяет
+        </p>
       </div>
     </div>
   );
